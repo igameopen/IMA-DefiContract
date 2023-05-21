@@ -10,9 +10,12 @@ import "./library/Percentages.sol";
 
 contract iGames is ERC20, Ownable {
     using Percentages for uint256;
+    using SafeMath for uint256;
 
+    // Goerli
     address public constant WETH9 = 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1;
     address public constant FACTORY = 0x1F98431c8aD98523631AE4a59f267346ea31F984;
+    address public constant POSITION_MANAGER = 0xC36442b4a4522E871399CD717aBDD847Ab11FE88;
 
     address public constant MARKETING = 0xebdeA78F37588752AFED1681C8E068F23CFEc010;
     address public constant LP = 0xCCF5B6C077996ba12f63b283c5c8335ADCdfEe66;
@@ -40,6 +43,20 @@ contract iGames is ERC20, Ownable {
         _excludedFee[MARKETING] = true;
         _excludedFee[LP] = true;
         _excludedFee[msg.sender] = true;
+    } 
+
+    function mintReward(address miner, uint256 amount) external onlyOwner {
+        super._transfer(address(this), miner, amount);
+    }
+
+    function addExcludedFee(address addr) external onlyOwner {
+        require(address(0) != addr, "ExcludedFee: address is zero");
+        _excludedFee[addr] = true;
+    }
+
+    function removeExcludedFee(address addr) external onlyOwner {
+        require(address(0) != addr, "ExcludedFee: address is zero");
+        _excludedFee[addr] = false;
     }
 
     function setLPFee(uint16 lpFee) external onlyOwner percentage(lpFee) {
@@ -50,32 +67,32 @@ contract iGames is ERC20, Ownable {
         _marketingFee = marketingFee;
     }
 
-    function addExcludedFee(address addr_) external onlyOwner {
-        require(address(0) != addr_, "ExcludedFee: address is zero");
-        _excludedFee[addr_] = true;
-    }
-
-    function removeExcludedFee(address addr_) external onlyOwner {
-        require(address(0) != addr_, "ExcludedFee: address is zero");
-        _excludedFee[addr_] = false;
-    }
-
     function _transfer(
         address from,
         address to,
         uint256 amount
     ) internal override {
-        if (from != _uniswapV3Pool && to != _uniswapV3Pool) {
+        if (!_isSwapTransfer(from, to) || _excludedFee[from] || _excludedFee[to]) {
             super._transfer(from, to, amount);
             return;    
         }
 
-        
+        uint256 lpFee = amount.mulPercentage(_lpFee);
+        uint256 marketingFee = amount.mulPercentage(_marketingFee);
+        uint256 trunAmount = amount.sub(lpFee).sub(marketingFee);
+
+        super._transfer(from, LP, lpFee);
+        super._transfer(from, MARKETING, marketingFee);
+        super._transfer(from, to, trunAmount);
     }
 
     function _transferOwnership(address newOwner) internal override {
         super._transferOwnership(newOwner);
         _excludedFee[msg.sender] = false;
         _excludedFee[newOwner] = true;
+    }
+
+    function _isSwapTransfer(address from, address to) private view returns (bool) {
+        return msg.sender != POSITION_MANAGER && (from == _uniswapV3Pool || to == _uniswapV3Pool);
     }
 }
