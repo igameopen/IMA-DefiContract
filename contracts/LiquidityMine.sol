@@ -61,6 +61,7 @@ contract LiquidityMine is Ownable, ERC721Holder {
 
     event Deposit(address indexed user, uint256 indexed tokenId, uint128 liquidity);
     event Withdraw(address indexed user, address indexed token, uint256 amount);
+    event Bind(address indexed user, address referrer);
 
     address public constant POSITION_MANAGER = 0xC36442b4a4522E871399CD717aBDD847Ab11FE88;
 
@@ -120,7 +121,7 @@ contract LiquidityMine is Ownable, ERC721Holder {
                 ,
                 ,
             ) = INonfungiblePositionManager(POSITION_MANAGER).positions(tokenId);
-            if (poolToken0 == token0 && poolToken1 == token1 && poolFee == fee) {
+            if (poolToken0 == token0 && poolToken1 == token1 && poolFee == fee && liquidity > 0) {
                 (int256 amount0, int256 amount1) = _getAmountDelta(tick, sqrtPriceX96, tickLower, tickUpper, int128(liquidity));
                 Position memory position = Position (
                     tokenId,
@@ -155,6 +156,17 @@ contract LiquidityMine is Ownable, ERC721Holder {
 
         for (uint256 i = 0; i < liquidityCount; i++) {
             Liquidity memory liquidityInfo = _users[msg.sender].liquidities[i];
+
+            uint256 amount0;
+            uint256 amount1;
+
+            if (token0 == _igs) {
+                amount0 = liquidityInfo.depositIGS;
+                amount1 = liquidityInfo.depositETH;
+            } else {
+                amount0 = liquidityInfo.depositETH;
+                amount1 = liquidityInfo.depositIGS;
+            }
             
             Position memory position = Position (
                 liquidityInfo.tokenId,
@@ -162,8 +174,8 @@ contract LiquidityMine is Ownable, ERC721Holder {
                 token1,
                 fee,
                 liquidityInfo.liquidity,
-                liquidityInfo.depositETH,
-                liquidityInfo.depositIGS
+                amount0,
+                amount1
             );
             array[i] = position;
         }
@@ -182,7 +194,9 @@ contract LiquidityMine is Ownable, ERC721Holder {
             uint256 withdrawETH,
             uint256 withdrawIGS,
             uint256 benefitedETH,
-            uint256 benefitedIGS
+            uint256 benefitedIGS,
+            bool isBind,
+            address referrer
         )
     {
         (sqrtPriceX96, , , , , , ) = IUniswapV3Pool(_pool).slot0();
@@ -195,6 +209,8 @@ contract LiquidityMine is Ownable, ERC721Holder {
             withdrawIGS = userInfo.withdrawIGS;
             benefitedETH = userInfo.benefitedETH;
             benefitedIGS = userInfo.benefitedIGS;
+            isBind = userInfo.referrer != address(0);
+            referrer = userInfo.referrer;
         }
 
     }
@@ -229,6 +245,8 @@ contract LiquidityMine is Ownable, ERC721Holder {
         userInfo.referrer = referrer;
         _lastUserId ++;
         _users[referrer].recommends.push(msg.sender); 
+
+        emit Bind(msg.sender, referrer);
     }
 
     function deposit(uint256 tokenId) external registered(msg.sender) {
@@ -308,6 +326,8 @@ contract LiquidityMine is Ownable, ERC721Holder {
         userInfo.liquidities.pop();
 
         _updateFee();
+
+        emit Withdraw(msg.sender, POSITION_MANAGER, tokenId);
     }
 
     function withdrawUserIGS() external registered(msg.sender) {
@@ -368,7 +388,6 @@ contract LiquidityMine is Ownable, ERC721Holder {
     }
 
     function _getAmountDelta(int24 tick, uint160 sqrtPriceX96, int24 tickLower, int24 tickUpper, int128 liquidityDelta) private pure returns (int256 amount0, int256 amount1) {
-        // (, int24 tick, , , , , ) IUniswapV3Pool(POOL).slot0();
         if (liquidityDelta != 0) {
             if (tick < tickLower) {
                 amount0 = SqrtPriceMath.getAmount0Delta(
