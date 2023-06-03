@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.7.6;
+pragma abicoder v2;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/EnumerableSet.sol";
 import "@openzeppelin/contracts/math/SafeMath.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
 import "@uniswap/v3-core/contracts/libraries/TickMath.sol";
 import "@uniswap/v3-core/contracts/interfaces/IUniswapV3Pool.sol";
 import "@uniswap/v3-periphery/contracts/libraries/LiquidityAmounts.sol";
 import "@uniswap/v3-periphery/contracts/interfaces/INonfungiblePositionManager.sol";
+import "./IERC20Metadata.sol";
 import "./IIGamesNFT.sol";
 
 contract Defi is Ownable {
@@ -24,6 +25,41 @@ contract Defi is Ownable {
         mapping(address => uint256) dividends;
         mapping(address => uint256) dividendsWithdraw;
         mapping(address => uint256) awards;
+        AwardRecord[] awardRecords;
+    }
+
+    struct Pool {
+        address token0;
+        address token1;
+        uint24 fee;
+    }
+
+    struct AwardRecord {
+        address account;
+        address token;
+        string symbol;
+        uint8 decimals;
+        uint256 amount;
+    }
+
+    struct TokenInfo {
+        string symbol;
+        uint8 decimals;
+    }
+
+    struct TokenAmountRes {
+        address token;
+        string symbol;
+        uint8 decimals;
+        uint256 amount;
+    }
+
+    struct AwardRecordRes {
+        address account;
+        address token;
+        string symbol;
+        uint8 decimals;
+        uint256 amount;
     }
 
     event Bind(address indexed account, address referrer);
@@ -36,27 +72,44 @@ contract Defi is Ownable {
 
     address public constant MARKETING = 0xb728c15C35ADF40A8627a6dfA2614D8E84f03361;
 
+    address public _igs;
+
     address public _uniswapV3Pool;
+    Pool public _pool;
     address public _nftToken;
 
-    uint public _shareHolderMinAmount = 2_550_000 ether;
+    uint256 public _shareHolderMinAmount = 2_600_000 ether;
+
+    uint16 public _shareFee = 2000;
 
     mapping(address => Account) public _accountMap;
     address[] public _accounts;
     uint256 private _lastId = 1;
 
     EnumerableSet.AddressSet _dividends;
+    mapping(address => TokenInfo) _tokenInfoMap;
 
-    function setUniswapV3Pool(address pool) external onlyOwner {
-        _uniswapV3Pool = pool;
+    function setIGS(address token) external onlyOwner {
+        _igs = token;
     }
 
-    function setShareHolderMinAmount(uint amount) external onlyOwner {
+    function setUniswapV3Pool(address uniswapV3Pool) external onlyOwner {
+        _uniswapV3Pool = uniswapV3Pool;
+        _pool.token0 = IUniswapV3Pool(_uniswapV3Pool).token0();
+        _pool.token1 = IUniswapV3Pool(_uniswapV3Pool).token1();
+        _pool.fee = IUniswapV3Pool(_uniswapV3Pool).fee();
+    }
+
+    function setShareHolderMinAmount(uint256 amount) external onlyOwner {
         _shareHolderMinAmount = amount;
     }
 
     function setNFTToken(address nftToken) external onlyOwner {
         _nftToken = nftToken;
+    }
+
+    function setShareFee(uint16 fee) external onlyOwner {
+        _shareFee = fee;
     }
 
     function bind(address referrer) external {
@@ -77,6 +130,7 @@ contract Defi is Ownable {
     function mint() external {
         require(_nftToken != address(0), "Defi: NFT not init");
         address sender = _msgSender();
+        require(IIGamesNFT(_nftToken).balanceOf(sender) == 0, "Defi: can not mint");
         require(isShareholder(sender), "Defi: not shareholder");
         IIGamesNFT(_nftToken).mint(sender);
 
@@ -89,20 +143,44 @@ contract Defi is Ownable {
         Account storage accountInfo = _accountMap[sender];
         uint256 balance = accountInfo.dividends[token];
         require(balance >= amount, "Defi: amount exceeds balance");
-        uint256 fee = amount.div(5);
-        IERC20(token).safeTransfer(accountInfo.referrer, fee);
-        IERC20(token).safeTransfer(sender, amount.sub(fee));
+
+        if (accountInfo.referrer == MARKETING) {
+            IERC20(token).safeTransfer(sender, amount);
+        } else {
+            uint256 fee = amount.mul(_shareFee).div(10000);
+            IERC20(token).safeTransfer(accountInfo.referrer, fee);
+            IERC20(token).safeTransfer(sender, amount.sub(fee));
+            
+            _accountMap[accountInfo.referrer].awards[token] += fee;
+            
+            _accountMap[accountInfo.referrer].awardRecords.push(AwardRecord(
+                sender,
+                token,
+                _tokenInfoMap[token].symbol,
+                _tokenInfoMap[token].decimals,
+                fee
+            ));
+        }
 
         accountInfo.dividends[token] -= amount;
         accountInfo.dividendsWithdraw[token] += amount;
-        _accountMap[accountInfo.referrer].awards[token] += fee;
 
         emit Withdraw(sender, token, amount);
+    }
+
+    function isBind(address account) public view returns(bool) {
+        return _accountMap[account].id != 0;
     }
 
     function isShareholder(address account) public view returns(bool) {
         (uint256 amountIGS, , ) = _poolLiquidityAndPrincipalForAccount(account);
         return amountIGS >= _shareHolderMinAmount;
+    }
+
+    function getLiquidityGross(address account) public view returns(uint160) {
+        if (_accountMap[account].id == 0) return 0;
+        ( , , uint160 liquidityGross) = _poolLiquidityAndPrincipalForAccount(account);
+        return liquidityGross;
     }
 
     function shareholderCount() public view returns(uint256) {
@@ -115,13 +193,100 @@ contract Defi is Ownable {
         return count;
     }
 
+    function poolSqrtPriceX96() external view returns(uint160) {
+        if (_uniswapV3Pool == address(0)) return 0;
+        (uint160 sqrtPriceX96, , , , , , ) = IUniswapV3Pool(_uniswapV3Pool).slot0();
+        return sqrtPriceX96;
+    }
+
+    function dividendsRecord(address account) external view returns(TokenAmountRes[] memory) {
+        if (_accountMap[account].id == 0) return new TokenAmountRes[](0);
+
+        uint256 currentIndex = 0;
+
+        for (uint i = 0; i < _dividends.length(); i++) {
+            address token = _dividends.at(i);
+            if (_accountMap[account].dividends[token] > 0) {
+                currentIndex ++;
+            }
+        }
+
+        TokenAmountRes[] memory results = new TokenAmountRes[](currentIndex);
+        currentIndex = 0;
+        for (uint i = 0; i < _dividends.length(); i++) {
+            address token = _dividends.at(i);
+            if (_accountMap[account].dividends[token] > 0) {
+                results[currentIndex] = TokenAmountRes(
+                    token, 
+                    _tokenInfoMap[token].symbol, 
+                    _tokenInfoMap[token].decimals,
+                    _accountMap[account].dividends[token]
+                );
+                currentIndex ++;
+            }
+        }
+        return results;
+    }
+
+    function dividendsWithdrawRecord(address account) external view returns(TokenAmountRes[] memory) {
+        if (_accountMap[account].id == 0) return new TokenAmountRes[](0);
+
+        uint256 currentIndex = 0;
+
+        for (uint i = 0; i < _dividends.length(); i++) {
+            address token = _dividends.at(i);
+            if (_accountMap[account].dividendsWithdraw[token] > 0) {
+                currentIndex ++;
+            }
+        }
+
+        TokenAmountRes[] memory results = new TokenAmountRes[](currentIndex);
+        currentIndex = 0;
+        for (uint i = 0; i < _dividends.length(); i++) {
+            address token = _dividends.at(i);
+            if (_accountMap[account].dividendsWithdraw[token] > 0) {
+                results[currentIndex] = TokenAmountRes(
+                    token, 
+                    _tokenInfoMap[token].symbol, 
+                    _tokenInfoMap[token].decimals,
+                    _accountMap[account].dividendsWithdraw[token]
+                );
+                currentIndex ++;
+            }
+        }
+        return results;
+    }
+
+    function awardRecord(address account) external view returns(AwardRecord[] memory) {
+        if (_accountMap[account].id == 0) return new AwardRecord[](0);
+        return _accountMap[account].awardRecords;
+    }
+
+    function recommendCount(address account) external view returns(uint256) {
+        if (_accountMap[account].id == 0) return 0;
+        return _accountMap[account].recommends.length;
+    }
+
+    function recommendLiquidityGross(address account) external view returns(uint128) {
+        if (_accountMap[account].id == 0) return 0;
+        uint128 liquidityGross = 0;
+        for (uint256 i = 0; i < _accountMap[account].recommends.length; i++) {
+            (, , uint128 liquidity) = _poolLiquidityAndPrincipalForAccount(_accountMap[account].recommends[i]);
+            liquidityGross += liquidity;
+        }
+        return liquidityGross;
+    }
+
     function gameDividend(address token, uint256 amount) external onlyOwner {
         require(_uniswapV3Pool != address(0), "Defi: pool not init");
         require(amount > 0, "Defi: amount not be zero");
         IERC20(token).safeTransferFrom(_msgSender(), address(this), amount);
-        _dividends.add(token);
-        (, int24 tick, , , , ,) = IUniswapV3Pool(_uniswapV3Pool).slot0();
-        (uint128 liquidityGross, , , , , , ,) = IUniswapV3Pool(_uniswapV3Pool).ticks(tick);
+        if (!_dividends.contains(token)) {
+            _dividends.add(token);
+            _tokenInfoMap[token].decimals = IERC20Metadata(token).decimals();
+            _tokenInfoMap[token].symbol = IERC20Metadata(token).symbol();
+        }
+        uint128 liquidityGross = IUniswapV3Pool(_uniswapV3Pool).liquidity();
         
         for (uint256 i = 0; i < _accounts.length; i++) {
             address account = _accounts[i];
@@ -140,9 +305,6 @@ contract Defi is Ownable {
         if (_uniswapV3Pool == address(0) || _accountMap[account].id == 0) return (0, 0, 0);
         uint256 balance = INonfungiblePositionManager(POSITION_MANAGER).balanceOf(account);
         if (balance == 0) return (0, 0, 0);
-        address poolToken0 = IUniswapV3Pool(_uniswapV3Pool).token0();
-        address poolToken1 = IUniswapV3Pool(_uniswapV3Pool).token1();
-        uint24 poolFee = IUniswapV3Pool(_uniswapV3Pool).fee();
         (uint160 sqrtPriceX96, , , , , , ) = IUniswapV3Pool(_uniswapV3Pool).slot0();
 
         for (uint256 i = 0; i < balance; i++) {
@@ -160,7 +322,7 @@ contract Defi is Ownable {
                 ,
                 ,
             ) = INonfungiblePositionManager(POSITION_MANAGER).positions(tokenId);
-            if (poolToken0 == token0 && poolToken1 == token1 && poolFee == fee && liquidity > 0) {
+            if (_pool.token0 == token0 && _pool.token1 == token1 && _pool.fee == fee && liquidity > 0) {
                 (uint256 amount0, uint256 amount1) = _principal(sqrtPriceX96, tickLower, tickUpper, liquidity);
                 if (_isToken0()) {
                     amountIGS += amount0;
@@ -185,6 +347,6 @@ contract Defi is Ownable {
     }
 
     function _isToken0() private view returns(bool) {
-        return address(this) < WETH9;
+        return _igs < WETH9;
     }
 }
