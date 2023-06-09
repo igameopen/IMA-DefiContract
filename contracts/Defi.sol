@@ -25,7 +25,6 @@ contract Defi is Ownable {
         mapping(address => uint256) dividends;
         mapping(address => uint256) dividendsWithdraw;
         mapping(address => uint256) awards;
-        AwardRecord[] awardRecords;
     }
 
     struct Pool {
@@ -34,32 +33,23 @@ contract Defi is Ownable {
         uint24 fee;
     }
 
-    struct AwardRecord {
-        address account;
-        address token;
-        string symbol;
-        uint8 decimals;
-        uint256 amount;
-    }
-
     struct TokenInfo {
         string symbol;
         uint8 decimals;
+    }
+
+    struct RecommendRes {
+        address recommend;
+        uint160 liquidity;
     }
 
     struct TokenAmountRes {
         address token;
         string symbol;
         uint8 decimals;
-        uint256 amount;
-    }
-
-    struct AwardRecordRes {
-        address account;
-        address token;
-        string symbol;
-        uint8 decimals;
-        uint256 amount;
+        uint256 dividends;
+        uint256 dividendsWithdraw;
+        uint256 awards;
     }
 
     event Bind(address indexed account, address referrer);
@@ -68,7 +58,7 @@ contract Defi is Ownable {
 
     address public constant POSITION_MANAGER = 0xC36442b4a4522E871399CD717aBDD847Ab11FE88;
 
-    address public constant WETH9 = 0xB4FBF271143F4FBf7B91A5ded31805e42b2208d6;
+    address public constant WETH9 = 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1;
 
     address public constant MARKETING = 0xb728c15C35ADF40A8627a6dfA2614D8E84f03361;
 
@@ -152,14 +142,6 @@ contract Defi is Ownable {
             IERC20(token).safeTransfer(sender, amount.sub(fee));
             
             _accountMap[accountInfo.referrer].awards[token] += fee;
-            
-            _accountMap[accountInfo.referrer].awardRecords.push(AwardRecord(
-                sender,
-                token,
-                _tokenInfoMap[token].symbol,
-                _tokenInfoMap[token].decimals,
-                fee
-            ));
         }
 
         accountInfo.dividends[token] -= amount;
@@ -206,7 +188,12 @@ contract Defi is Ownable {
 
         for (uint i = 0; i < _dividends.length(); i++) {
             address token = _dividends.at(i);
-            if (_accountMap[account].dividends[token] > 0) {
+            if (
+                _accountMap[account].dividends[token] > 0 ||
+                _accountMap[account].dividendsWithdraw[token] > 0 ||
+                _accountMap[account].awards[token] > 0
+                ) 
+            {
                 currentIndex ++;
             }
         }
@@ -215,51 +202,39 @@ contract Defi is Ownable {
         currentIndex = 0;
         for (uint i = 0; i < _dividends.length(); i++) {
             address token = _dividends.at(i);
-            if (_accountMap[account].dividends[token] > 0) {
+            uint256 dividends = _accountMap[account].dividends[token];
+            uint256 dividendWithdraw = _accountMap[account].dividendsWithdraw[token];
+            uint256 awards = _accountMap[account].awards[token];
+            if (dividends > 0 || dividendWithdraw > 0 || awards > 0) {
                 results[currentIndex] = TokenAmountRes(
                     token, 
                     _tokenInfoMap[token].symbol, 
                     _tokenInfoMap[token].decimals,
-                    _accountMap[account].dividends[token]
+                    dividends,
+                    dividendWithdraw,
+                    awards
                 );
-                currentIndex ++;
             }
         }
         return results;
     }
 
-    function dividendsWithdrawRecord(address account) external view returns(TokenAmountRes[] memory) {
-        if (_accountMap[account].id == 0) return new TokenAmountRes[](0);
+    function recommends(address account) external view returns(RecommendRes[] memory) {
+        if (_accountMap[account].id == 0) return new RecommendRes[](0);
 
-        uint256 currentIndex = 0;
+        Account storage accountInfo = _accountMap[account];
 
-        for (uint i = 0; i < _dividends.length(); i++) {
-            address token = _dividends.at(i);
-            if (_accountMap[account].dividendsWithdraw[token] > 0) {
-                currentIndex ++;
-            }
-        }
+        RecommendRes[] memory results = new RecommendRes[](accountInfo.recommends.length);
 
-        TokenAmountRes[] memory results = new TokenAmountRes[](currentIndex);
-        currentIndex = 0;
-        for (uint i = 0; i < _dividends.length(); i++) {
-            address token = _dividends.at(i);
-            if (_accountMap[account].dividendsWithdraw[token] > 0) {
-                results[currentIndex] = TokenAmountRes(
-                    token, 
-                    _tokenInfoMap[token].symbol, 
-                    _tokenInfoMap[token].decimals,
-                    _accountMap[account].dividendsWithdraw[token]
-                );
-                currentIndex ++;
-            }
+        for (uint256 i = 0; i < accountInfo.recommends.length; i ++) {
+            address recommend = accountInfo.recommends[i];
+            (, , uint128 liquidity) = _poolLiquidityAndPrincipalForAccount(recommend);
+            results[i] = RecommendRes(
+                recommend,
+                liquidity
+            );
         }
         return results;
-    }
-
-    function awardRecord(address account) external view returns(AwardRecord[] memory) {
-        if (_accountMap[account].id == 0) return new AwardRecord[](0);
-        return _accountMap[account].awardRecords;
     }
 
     function recommendCount(address account) external view returns(uint256) {
