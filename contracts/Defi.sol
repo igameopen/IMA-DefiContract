@@ -358,8 +358,12 @@ contract Defi is Ownable {
             accountLiquidities[j] = temp;
         }
 
-        AccountLiquidity[] memory newAccountLiquidities = new AccountLiquidity[](_maxShareholderCount);
-        for (uint256 i = 0; i < _maxShareholderCount && i < count; i ++) {
+        if (count > _maxShareholderCount) {
+            count = _maxShareholderCount;
+        }
+        
+        AccountLiquidity[] memory newAccountLiquidities = new AccountLiquidity[](count);
+        for (uint256 i = 0; i < count; i ++) {
             newAccountLiquidities[i] = accountLiquidities[i];
         }
 
