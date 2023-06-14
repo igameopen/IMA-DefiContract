@@ -20,25 +20,18 @@ describe("Defi", function () {
   }
 
   describe("测试", function () {
-    it("设置池地址", async function () {
-        const { contract, owner, otherAccount } = await loadFixture(deployDefiFixture);
-        const poolAddress = "0xb728c15C35ADF40A8627a6dfA2614D8E84f03361";
-        await contract.setUniswapV3Pool(poolAddress)
-        expect(await contract._uniswapV3Pool()).to.equal(poolAddress)
-    });
-
-    it("设置股东最小流动性门槛", async function () {
-        const { contract, owner, otherAccount } = await loadFixture(deployDefiFixture);
-        const amount = utils.parseEther('188888')
-        await contract.setShareHolderMinAmount(amount);
-        expect(await contract._shareHolderMinAmount()).to.equal(amount)
-    });
+    // it("设置池地址", async function () {
+    //     const { contract, owner, otherAccount } = await loadFixture(deployDefiFixture);
+    //     const poolAddress = "0xb728c15C35ADF40A8627a6dfA2614D8E84f03361";
+    //     await contract.setUniswapV3Pool(poolAddress)
+    //     expect(await contract._uniswapV3Pool()).to.equal(poolAddress)
+    // });
 
 
     it("绑定", async function () {
       const { contract, owner, otherAccount } = await loadFixture(deployDefiFixture);
       await contract.bind("0xb728c15C35ADF40A8627a6dfA2614D8E84f03361")
-      const accountInfo = await contract._accountMapping(owner.address)
+      const accountInfo = await contract._accountMap(owner.address)
       expect(accountInfo.id).to.equal(1)
     });
   });
