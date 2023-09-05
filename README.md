@@ -92,6 +92,7 @@ setShareFee(uint16 fee)
 gameDividend(address token, uint256 amount)
 ```
 
+操作员必须先 Approve 相应的数量到合约  
 直接根据当前股东列表分发 token
 
 ---
@@ -103,7 +104,7 @@ gameDividend(address token, uint256 amount, uint256 percentagePledged, uint256 s
 ```
 
 token: 分发的 Token 地址  
-amount: 分发数量  
+amount: 分发数量(操作员必须先 Approve 相应的数量到合约)  
 percentagePledged: 质押百分比(如质押 20%则输入 2000, 5%输入 500, 以此类推; 分发数量减去这质押的数量, 剩余的就是立刻分发的, 例如这里质押 30%(输入 3000), 则 70%的 token 会立刻分发, 30%则进行质押)  
 start: 开始(第一次)释放时间戳(10 位秒数时间戳)  
 duration: 释放间隔(到释放时间后, 下一次的释放间隔, 秒为单位, 如 01:00 开始释放, 下一次一分钟释放后则输入 60)  
@@ -192,7 +193,7 @@ poolSqrtPriceX96() external view returns(uint160)
 
 ---
 
-### 分红记录\[待提现, 已提现, 分润\](二维数组)
+### 分红统计\[待提现, 已提现, 分润, 已释放, 质押\](二维数组)
 
 ```
 
@@ -219,6 +220,24 @@ uint256 pledge; // 质押
 
 ---
 
+### 分红记录
+
+```
+dividendRecords(address account)
+```
+
+返回
+
+```
+struct DividendRecord {
+    address token;
+    uint256 amount;
+    uint256 timestamp;
+}
+```
+
+---
+
 ### 释放记录
 
 ```
@@ -238,6 +257,8 @@ uint256 amount; // 释放数量
 }
 
 ```
+
+---
 
 ### 推荐人数
 

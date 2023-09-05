@@ -25,6 +25,7 @@ contract Defi is Ownable, VestingWallet {
         mapping(address => uint256) dividends;
         mapping(address => uint256) dividendsWithdraw;
         mapping(address => uint256) awards;
+        DividendRecord[] dividendRecords;
     }
 
     struct Pool {
@@ -58,6 +59,12 @@ contract Defi is Ownable, VestingWallet {
         address account;
         uint256 createdTime;
         uint160 liquidity;
+    }
+
+    struct DividendRecord {
+        address token;
+        uint256 amount;
+        uint256 timestamp;
     }
 
     event Bind(address indexed account, address referrer);
@@ -261,6 +268,10 @@ contract Defi is Ownable, VestingWallet {
         return results;
     }
 
+    function dividendRecords(address account) external view returns (DividendRecord[] memory) {
+        return _accountMap[account].dividendRecords;
+    }
+
     function recommends(address account) external view returns (AccountLiquidity[] memory) {
         if (_accountMap[account].id == 0) return new AccountLiquidity[](0);
 
@@ -312,6 +323,9 @@ contract Defi is Ownable, VestingWallet {
             _accountMap[account].dividends[token] = _accountMap[account].dividends[token].add(
                 amount.mul(liquidity).div(uint256(liquidityGross))
             );
+            _accountMap[account].dividendRecords.push(
+                DividendRecord(token, amount.mul(liquidity).div(uint256(liquidityGross)), block.timestamp)
+            );
         }
     }
 
@@ -345,6 +359,13 @@ contract Defi is Ownable, VestingWallet {
             _accountMap[shareholderLiquidities[i].account].dividends[token] = _accountMap[
                 shareholderLiquidities[i].account
             ].dividends[token].add(amountRelease.mul(shareholderLiquidities[i].liquidity).div(uint256(liquidityTotal)));
+            _accountMap[shareholderLiquidities[i].account].dividendRecords.push(
+                DividendRecord(
+                    token,
+                    amountRelease.mul(shareholderLiquidities[i].liquidity).div(uint256(liquidityTotal)),
+                    block.timestamp
+                )
+            );
             vestingWallet(
                 shareholderLiquidities[i].account,
                 token,
